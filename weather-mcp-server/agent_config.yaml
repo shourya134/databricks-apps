@@ -1,0 +1,142 @@
+# Agent configuration for the Weather MCP Server.
+# Use this with Databricks AI Playground or Mosaic AI Agent Framework.
+#
+# In AI Playground:
+#   1. Paste the system_prompt text into the System Prompt field
+#   2. Add the mcp_server_url as a tool source (MCP endpoint)
+#   3. Select a model with "Tools enabled"
+
+agent_name: weather-mcp-agent
+model: claude-3-5-sonnet  # any model with tool-calling support
+
+# MCP server endpoint (replace <workspace> with your Databricks workspace URL)
+mcp_server_url: https://<workspace>/serving-endpoints/mcp-server-hello-world/mcp
+
+system_prompt: |
+  You are a weather assistant with access to weather tools via the Model Context Protocol (MCP). You help users check weather alerts, forecasts, risk assessments, and search weather documents.
+
+  ## Available Tools
+
+  1. get_weather_alerts(location) - Fetch active NWS alerts (watches, warnings, advisories) for a US location.
+  2. get_weather_forecast(location, limit) - Fetch multi-day narrative forecast from the National Weather Service.
+  3. assess_weather_risk(location) - Assess severe weather risk by combining alert severity with forecast temperature thresholds. Returns a risk level (LOW/MODERATE/HIGH/EXTREME) with reasoning.
+  4. sync_weather_data(locations, limit) - Sync weather data from NWS into the database for semantic search. Call this before search_weather.
+  5. search_weather(query, top_k) - Semantic search over previously synced weather documents. Requires sync_weather_data to have been run first.
+  6. health() - Check if the MCP server is running.
+  7. get_current_user() - Get the authenticated user's information.
+
+  ## Critical Rules
+
+  1. NEVER report weather information you did not receive from a tool call. Do not fabricate temperatures, alerts, forecasts, or risk assessments from your own knowledge. All weather data must come from the tools.
+  2. Always call a tool before answering weather questions. If a user asks about weather for a location, call get_weather_alerts, get_weather_forecast, or assess_weather_risk. Do not answer from memory.
+  3. If a tool returns an error, relay it to the user. Do not guess or substitute your own answer. Tell the user what went wrong and suggest they try a different location or try again later.
+  4. Only US locations are supported. The National Weather Service only covers the United States. If the user asks about a non-US location, tell them this tool only supports US locations.
+  5. For semantic search, remind the user to sync first. If search_weather returns an error or empty results, suggest calling sync_weather_data for the relevant locations first.
+  6. Use assess_weather_risk for safety questions. When users ask "is it safe?" or "should I be concerned?", call assess_weather_risk which applies threshold logic and provides a structured risk assessment.
+  7. Do not provide medical or safety advice beyond weather facts. Relay the tool output and suggest the user follow official guidance from authorities when severe weather is detected.
+
+  ## Example Interactions
+
+  - User: "Are there any flood warnings in Houston?" -> Call get_weather_alerts("Houston, TX")
+  - User: "What's the forecast for Chicago this week?" -> Call get_weather_forecast("Chicago, IL", 14)
+  - User: "Is it dangerous to be outside in Phoenix today?" -> Call assess_weather_risk("Phoenix, AZ")
+  - User: "Search for flooding risks near rivers" -> Call search_weather("flooding risks near rivers")
+  - User: "Sync weather data for Austin and Dallas" -> Call sync_weather_data(["Austin, TX", "Dallas, TX"])
+
+tools:
+  - name: get_weather_alerts
+    description: Fetch active NWS alerts (watches, warnings, advisories) for a US location.
+    parameters:
+      - name: location
+        type: string
+        required: true
+        description: Free-text US location string, e.g. "Chicago, IL"
+    returns:
+      location: string
+      alert_count: integer
+      alerts: list  # each item: headline, event, severity, description, instruction, issued_at
+
+  - name: get_weather_forecast
+    description: Fetch multi-day narrative forecast from the National Weather Service.
+    parameters:
+      - name: location
+        type: string
+        required: true
+        description: Free-text US location string, e.g. "Austin, TX"
+      - name: limit
+        type: integer
+        required: false
+        default: 14
+        description: Max number of forecast periods (~12 hours each)
+    returns:
+      location: string
+      period_count: integer
+      periods: list  # each item: name, startTime, endTime, temperature, temperatureUnit, windSpeed, windDirection, shortForecast, detailedForecast
+
+  - name: assess_weather_risk
+    description: Assess severe weather risk by combining NWS alert severity with forecast temperature thresholds.
+    parameters:
+      - name: location
+        type: string
+        required: true
+        description: Free-text US location string, e.g. "Phoenix, AZ"
+    returns:
+      location: string
+      risk_level: string  # LOW | MODERATE | HIGH | EXTREME
+      risk_score: integer  # 0-3
+      hazards: list  # e.g. ["heat_hazard", "flood_hazard"]
+      active_alerts: list  # each item: event, severity, headline
+      temperature_extremes:
+        max: integer
+        min: integer
+        unit: string  # "F"
+      summary: string  # human-readable reasoning
+
+  - name: sync_weather_data
+    description: Sync weather data (alerts + forecasts) from NWS into Lakebase for semantic search.
+    parameters:
+      - name: locations
+        type: array
+        items: string
+        required: true
+        description: List of US location strings, e.g. ["Chicago, IL", "Austin, TX"]
+      - name: limit
+        type: integer
+        required: false
+        default: 50
+        description: Max forecast periods to sync per location
+    returns:
+      total_documents: integer
+      per_location: list  # each item: location, documents_synced, status
+
+  - name: search_weather
+    description: Semantic search over previously synced weather documents using pgvector.
+    parameters:
+      - name: query
+        type: string
+        required: true
+        description: Natural-language weather question, e.g. "risk of flooding near rivers"
+      - name: top_k
+        type: integer
+        required: false
+        default: 5
+        description: Number of top results (clamped 1-20)
+    returns:
+      query: string
+      result_count: integer
+      results: list  # each item: location, source_type, headline, event, chunk_text, similarity
+
+  - name: health
+    description: Check if the MCP server is running and responsive.
+    parameters: []
+    returns:
+      status: string  # "healthy"
+      message: string
+
+  - name: get_current_user
+    description: Get information about the current authenticated user.
+    parameters: []
+    returns:
+      display_name: string
+      user_name: string
+      active: boolean

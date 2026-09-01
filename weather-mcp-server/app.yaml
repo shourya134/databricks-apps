@@ -1,0 +1,10 @@
+command: ["uv", "run", "custom-mcp-server"]
+
+# Secrets/config are injected via Databricks secret references.
+# The DATABASE_URL secret was created for the weather-app-secrets scope:
+#   databricks secrets put-secret weather-app-secrets database-url
+env:
+  - name: "DATABASE_URL"
+    valueFrom: "weather-app-secrets.database-url"
+  - name: "NWS_USER_AGENT"
+    value: "weather-mcp-server (contact: set-your-contact-email@example.com)"
